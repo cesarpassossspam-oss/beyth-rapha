@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Beyth Rapha' | Hospital IA & Fintech</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0b1120; font-family: 'Inter', system-ui, sans-serif; color: #f1f5f9; min-height: 100vh; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.4); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+.spinner { width:52px;height:52px;border-radius:50%;border:3px solid rgba(59,130,246,0.2);border-top:3px solid #3b82f6;animation:spin 1s linear infinite;margin:0 auto 20px; }
+.pulse-dot { width:7px;height:7px;border-radius:50%;background:#10b981;display:inline-block;animation:pulse 2s infinite; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+const TABS = { PACIENTE:"paciente", MEDICO:"medico", FINTECH:"fintech" };
+const PATIENT_STEPS = { CONSENT:"consent", FORM:"form", TRIAGE:"triage" };
+
+const SYMPTOM_CHIPS = [
+  "Febre","Dor de cabeça","Dor no peito","Falta de ar","Náusea","Vômito",
+  "Dor abdominal","Tontura","Palpitações","Tosse","Dor de garganta",
+  "Diarreia","Cansaço extremo","Confusão mental","Dor nas costas","Desmaio",
+];
+
+const EXAMES = [
+  { id:"nenhum", label:"Nenhum exame", valor:0, split:0, lab:"—" },
+  { id:"lab",    label:"Exames Laboratoriais", valor:120, split:96, lab:"Sabin" },
+  { id:"imagem", label:"Exame de Imagem (TC/RX)", valor:800, split:640, lab:"Fleury" },
+  { id:"cardio", label:"ECG / Holter (Interno)", valor:90, split:0, lab:"Interno" },
+];
+
+const FILA_INICIAL = [
+  { id:"BR-4102", nome:"Carlos Silva", cpf:"123.456.789-00", wpp:"(11) 91234-5678",
+    comor:"Diabetes Tipo 2", alerg:"Dipirona", meds:"Metformina 850mg", dor:7,
+    sintomas:"Forte tontura, visão embaçada e formigamento severo nos membros inferiores.",
+    chips:["Tontura","Confusão mental"], manchester:"URGENTE", wait:"30 min", status:"Aguardando",
+    laudo:"## Avaliação Clínica\nPaciente com tontura aguda e Diabetes Tipo 2. Risco de descompensação glicêmica.\n\n## Conduta\n- Verificar glicemia capilar\n- Avaliar pressão arterial\n- Teleconsulta prioritária" },
+  { id:"BR-8831", nome:"Maria Oliveira", cpf:"987.654.321-00", wpp:"(11) 99876-5432",
+    comor:"Nenhuma", alerg:"Nenhuma", meds:"Nenhum", dor:2,
+    sintomas:"Coriza, espirros e leve dor de garganta há 2 dias. Sem febre.",
+    chips:["Tosse","Dor de garganta"], manchester:"NÃO URGENTE", wait:"120 min", status:"Aguardando",
+    laudo:"## Avaliação Clínica\nInfecção viral de vias aéreas superiores. Sem critérios de gravidade.\n\n## Conduta\n- Hidratação oral\n- Antitérmicos se febre\n- Consulta eletiva" },
+];
+
+const TRANSACOES_INICIAIS = [
+  { paciente:{nome:"Carlos Silva"}, totalConsulta:150, totalExame:0, splitMedico:90, splitLab:0, retidoPlataforma:60, status:"LIQUIDADO" },
+  { paciente:{nome:"Maria Oliveira"}, totalConsulta:150, totalExame:0, splitMedico:90, splitLab:0, retidoPlataforma:60, status:"LIQUIDADO" },
+];
+
+function maskCPF(v) {
+  v = v.replace(/\D/g,"").slice(0,11);
+  if(v.length>9) return v.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/,"$1.$2.$3-$4");
+  if(v.length>6) return v.replace(/(\d{3})(\d{3})(\d{1,3})/,"$1.$2.$3");
+  if(v.length>3) return v.replace(/(\d{3})(\d{1,3})/,"$1.$2");
+  return v;
+}
+function maskPhone(v) {
+  v = v.replace(/\D/g,"").slice(0,11);
+  if(v.length>10) return v.replace(/(\d{2})(\d{5})(\d{4})/,"($1) $2-$3");
+  if(v.length>6) return v.replace(/(\d{2})(\d{4,5})(\d{0,4})/,"($1) $2-$3");
+  if(v.length>2) return v.replace(/(\d{2})(\d{0,5})/,"($1) $2");
+  return v;
+}
+function fmt(n) { return "R$ " + Number(n).toLocaleString("pt-BR",{minimumFractionDigits:2}); }
+function genId() { return "BR-" + Math.floor(1000+Math.random()*9000); }
+
+function manchColor(cat="") {
+  if(cat.includes("IMEDIATO"))      return {fg:"#ef4444",bg:"rgba(239,68,68,0.12)",bd:"rgba(239,68,68,0.3)"};
+  if(cat.includes("MUITO URGENTE")) return {fg:"#f97316",bg:"rgba(249,115,22,0.12)",bd:"rgba(249,115,22,0.3)"};
+  if(cat.includes("URGENTE"))       return {fg:"#eab308",bg:"rgba(234,179,8,0.12)",bd:"rgba(234,179,8,0.3)"};
+  if(cat.includes("POUCO URGENTE")) return {fg:"#22c55e",bg:"rgba(34,197,94,0.12)",bd:"rgba(34,197,94,0.3)"};
+  if(cat.includes("NÃO URGENTE"))   return {fg:"#3b82f6",bg:"rgba(59,130,246,0.12)",bd:"rgba(59,130,246,0.3)"};
+  return {fg:"#94a3b8",bg:"rgba(148,163,184,0.12)",bd:"rgba(148,163,184,0.3)"};
+}
+
+const S = {
+  card: { background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:16, padding:"20px 24px" },
+  input: { width:"100%", background:"rgba(255,255,255,0.04)", border:"1.5px solid rgba(255,255,255,0.1)", borderRadius:10, padding:"11px 14px", color:"#f1f5f9", fontSize:14, outline:"none", fontFamily:"inherit" },
+  label: { display:"block", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:"rgba(255,255,255,0.38)", marginBottom:6 },
+  secHead: { fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:"rgba(255,255,255,0.3)", marginBottom:14, borderBottom:"1px solid rgba(255,255,255,0.06)", paddingBottom:8 },
+  btnBlue: { width:"100%", background:"linear-gradient(135deg,#2563eb,#1d4ed8)", color:"white", border:"none", borderRadius:10, padding:"13px", fontSize:14, fontWeight:700, cursor:"pointer", boxShadow:"0 4px 20px rgba(37,99,235,0.3)" },
+  btnGreen: { width:"100%", background:"linear-gradient(135deg,#16a34a,#15803d)", color:"white", border:"none", borderRadius:10, padding:"13px", fontSize:14, fontWeight:700, cursor:"pointer" },
+};
+
+function Badge({cat}) {
+  const c = manchColor(cat);
+  return <span style={{padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:700,background:c.bg,color:c.fg,border:`1px solid ${c.bd}`,display:"inline-flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+    <span style={{width:7,height:7,borderRadius:"50%",background:c.fg,display:"inline-block"}}/>{cat}
+  </span>;
+}
+
+function FInput({value,onChange,placeholder,type="text"}) {
+  const [f,setF]=useState(false);
+  return <input type={type} value={value} onChange={onChange} placeholder={placeholder}
+    style={{...S.input,borderColor:f?"#2563eb":"rgba(255,255,255,0.1)"}}
+    onFocus={()=>setF(true)} onBlur={()=>setF(false)}/>;
+}
+function FTextarea({value,onChange,placeholder,rows=3}) {
+  const [f,setF]=useState(false);
+  return <textarea value={value} onChange={onChange} placeholder={placeholder} rows={rows}
+    style={{...S.input,resize:"none",borderColor:f?"#2563eb":"rgba(255,255,255,0.1)"}}
+    onFocus={()=>setF(true)} onBlur={()=>setF(false)}/>;
+}
+function Field({label,children}) {
+  return <div><label style={S.label}>{label}</label>{children}</div>;
+}
+
+// ── PORTAL PACIENTE ──────────────────────────────────────────
+function ConsentStep({onNext}) {
+  const [ok,setOk]=useState(false);
+  return (
+    <div style={S.card}>
+      <p style={S.secHead}>Termos de Consentimento — LGPD</p>
+      <h2 style={{color:"white",fontWeight:700,fontSize:20,marginBottom:6}}>Consentimento Livre e Esclarecido</h2>
+      <div style={{background:"rgba(0,0,0,0.2)",borderRadius:10,border:"1px solid rgba(255,255,255,0.06)",padding:16,height:170,overflowY:"auto",fontSize:12,color:"rgba(255,255,255,0.45)",lineHeight:1.7,marginBottom:20}}>
+        <p style={{marginBottom:10}}><strong>1. Coleta de Dados:</strong> Dados clínicos protegidos por criptografia, nunca utilizados comercialmente.</p>
+        <p style={{marginBottom:10}}><strong>2. Limites da IA:</strong> A IA realiza triagem preliminar. Não emite receitas nem diagnósticos definitivos.</p>
+        <p style={{marginBottom:10}}><strong>3. Responsabilidade Médica:</strong> Todas as condutas são confirmadas por médico humano habilitado.</p>
+        <p style={{marginBottom:10}}><strong>4. Direitos do Titular:</strong> Acesso, correção ou exclusão dos dados a qualquer momento (LGPD Art. 18).</p>
+        <p><strong>5. Retenção:</strong> Dados armazenados por mínimo de 5 anos conforme CFM.</p>
+      </div>
+      <label style={{display:"flex",gap:10,cursor:"pointer",marginBottom:20}}>
+        <input type="checkbox" checked={ok} onChange={e=>setOk(e.target.checked)} style={{width:16,height:16,marginTop:2,accentColor:"#2563eb",flexShrink:0}}/>
+        <span style={{fontSize:13,color:"rgba(255,255,255,0.6)",lineHeight:1.6}}>Li e aceito fornecer meus dados para triagem assistida por IA.</span>
+      </label>
+      <button onClick={()=>{if(!ok){alert("Aceite os termos para continuar.");return;}onNext();}} style={{...S.btnBlue,opacity:ok?1:0.4}}>
+        Avançar para Cadastro →
+      </button>
+    </div>
+  );
+}
+
+function FormStep({onSubmit}) {
+  const [nome,setNome]=useState(""); const [cpf,setCpf]=useState(""); const [wpp,setWpp]=useState("");
+  const [nasc,setNasc]=useState(""); const [queixa,setQueixa]=useState(""); const [dor,setDor]=useState(0);
+  const [comor,setComor]=useState(""); const [alerg,setAlerg]=useState(""); const [meds,setMeds]=useState("");
+  const [chips,setChips]=useState(new Set());
+  function toggle(s){setChips(p=>{const n=new Set(p);n.has(s)?n.delete(s):n.add(s);return n;});}
+  function submit(e){
+    e.preventDefault();
+    if(!nome||!cpf||!wpp||(!queixa&&chips.size===0)){alert("Preencha nome, CPF, WhatsApp e ao menos um sintoma.");return;}
+    onSubmit({nome,cpf,wpp,nasc,queixa,dor,comor,alerg,meds,chips:[...chips]});
+  }
+  const dc=dor>=8?"#ef4444":dor>=5?"#f97316":dor>=3?"#eab308":"#22c55e";
+  return (
+    <form onSubmit={submit} style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={S.card}>
+        <p style={S.secHead}>Dados Cadastrais</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          <Field label="Nome Completo"><FInput value={nome} onChange={e=>setNome(e.target.value)} placeholder="João da Silva"/></Field>
+          <Field label="CPF"><FInput value={cpf} onChange={e=>setCpf(maskCPF(e.target.value))} placeholder="000.000.000-00"/></Field>
+          <Field label="WhatsApp"><FInput value={wpp} onChange={e=>setWpp(maskPhone(e.target.value))} placeholder="(11) 99999-9999"/></Field>
+          <Field label="Data de Nascimento"><FInput type="date" value={nasc} onChange={e=>setNasc(e.target.value)}/></Field>
+        </div>
+      </div>
+      <div style={S.card}>
+        <p style={S.secHead}>Queixa Principal</p>
+        <div style={{marginBottom:16}}><Field label="Descreva os sintomas"><FTextarea value={queixa} onChange={e=>setQueixa(e.target.value)} placeholder="Localização, intensidade, início..." rows={4}/></Field></div>
+        <Field label={`Intensidade da dor — ${dor}/10`}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginTop:8}}>
+            <input type="range" min={0} max={10} value={dor} onChange={e=>setDor(Number(e.target.value))} style={{flex:1,accentColor:dc}}/>
+            <span style={{fontSize:22,fontWeight:800,color:dc,minWidth:28,textAlign:"center"}}>{dor}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"rgba(255,255,255,0.25)",marginTop:4}}>
+            <span>Sem dor</span><span>Insuportável</span>
+          </div>
+        </Field>
+        <div style={{marginTop:16}}>
+          <p style={{...S.label,marginBottom:10}}>Sintomas adicionais</p>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+            {SYMPTOM_CHIPS.map(s=>(
+              <span key={s} onClick={()=>toggle(s)} style={{cursor:"pointer",padding:"5px 13px",borderRadius:20,fontSize:12,border:`1.5px solid ${chips.has(s)?"#3b82f6":"rgba(255,255,255,0.1)"}`,background:chips.has(s)?"rgba(59,130,246,0.14)":"transparent",color:chips.has(s)?"#93c5fd":"rgba(255,255,255,0.45)",transition:"all 0.15s",userSelect:"none"}}>{s}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={S.card}>
+        <p style={S.secHead}>Histórico Clínico — Opcional</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          <Field label="Comorbidades"><FInput value={comor} onChange={e=>setComor(e.target.value)} placeholder="Ex: Diabetes, Hipertensão"/></Field>
+          <Field label="Alergias"><FInput value={alerg} onChange={e=>setAlerg(e.target.value)} placeholder="Ex: Dipirona, Iodo"/></Field>
+        </div>
+        <Field label="Medicamentos em Uso"><FInput value={meds} onChange={e=>setMeds(e.target.value)} placeholder="Ex: Metformina 850mg"/></Field>
+      </div>
+      <button type="submit" style={S.btnBlue}>🧠 Iniciar Triagem com IA</button>
+    </form>
+  );
+}
+
+function TriageStep({data,onConcluir}) {
+  const [phase,setPhase]=useState("loading");
+  const [laudo,setLaudo]=useState("");
+  const [cat,setCat]=useState("");
+  const [wait,setWait]=useState("");
+  const [logs,setLogs]=useState([]);
+  const ref=useRef("");
+
+  const LOGS=[
+    "> Recebendo prontuário do paciente...",
+    "> Validando comorbidades e alergias...",
+    "> Aplicando critérios Manchester...",
+    "> Calculando risco cardiovascular...",
+    "> Cruzando com base epidemiológica...",
+    "> Acionando modelo clínico de linguagem...",
+  ];
+
+  useEffect(()=>{
+    let i=0;
+    const iv=setInterval(()=>{
+      if(i>=LOGS.length){clearInterval(iv);startAI();return;}
+      setLogs(p=>[...p,LOGS[i++]]);
+    },380);
+    return ()=>clearInterval(iv);
+  },[]);
+
+  async function startAI(){
+    setPhase("streaming");
+    const prompt=`Você é um sistema de triagem clínica baseado no Protocolo de Manchester. Analise os dados e gere um laudo estruturado em português.
+
+DADOS:
+- Nome: ${data.nome}
+- Queixa: ${data.queixa||"Não informada"}
+- Dor (0-10): ${data.dor}
+- Sintomas: ${data.chips.length?data.chips.join(", "):"Nenhum"}
+- Comorbidades: ${data.comor||"Não informada"}
+- Alergias: ${data.alerg||"Não informada"}
+- Medicamentos: ${data.meds||"Não informado"}
+
+Formato exato:
+CLASSIFICAÇÃO: [IMEDIATO | MUITO URGENTE | URGENTE | POUCO URGENTE | NÃO URGENTE]
+TEMPO DE ESPERA: [0 min | 10 min | 30 min | 60 min | 120 min]
+
+## Avaliação Clínica
+[2-3 parágrafos avaliando sintomas e urgência]
+
+## Conduta Sugerida pela IA
+[3-5 recomendações clínicas]
+
+## Alertas e Contraindicações
+[Alergias ou interações relevantes. Se não houver: "Nenhum alerta identificado."]
+
+## Orientações ao Paciente
+[2-3 orientações práticas]
+
+Lembre: não diagnostica nem prescreve. Reforce necessidade de validação médica.`;
+
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,stream:true,messages:[{role:"user",content:prompt}]}),
+      });
+      const reader=res.body.getReader();
+      const dec=new TextDecoder();
+      while(true){
+        const{done,value}=await reader.read();
+        if(done)break;
+        for(const line of dec.decode(value).split("\n").filter(l=>l.startsWith("data: "))){
+          const j=line.replace("data: ","").trim();
+          if(j==="[DONE]")continue;
+          try{
+            const p=JSON.parse(j);
+            if(p.type==="content_block_delta"&&p.delta?.text){
+              ref.current+=p.delta.text;
+              setLaudo(ref.current);
+              const cm=ref.current.match(/CLASSIFICAÇÃO:\s*([A-ZÃÕ ]+)/);
+              const wm=ref.current.match(/TEMPO DE ESPERA:\s*([\d]+ min)/);
+              if(cm)setCat(cm[1].trim());
+              if(wm)setWait(wm[1].trim());
+            }
+          }catch{}
+        }
+      }
+      setPhase("done");
+    }catch(err){setLaudo("Erro: "+err.message);setPhase("done");}
+  }
+
+  function renderLaudo(text){
+    return text.split(/(?=## )/).map((sec,i)=>{
+      if(sec.startsWith("CLASSIFICAÇÃO:")||sec.startsWith("TEMPO DE ESPERA:"))return null;
+      const hm=sec.match(/^## (.+)\n/);
+      if(hm)return(
+        <div key={i} style={{borderLeft:"2px solid rgba(59,130,246,0.35)",paddingLeft:14,marginBottom:18}}>
+          <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",color:"rgba(255,255,255,0.38)",marginBottom:6}}>{hm[1]}</p>
+          <p style={{fontSize:14,color:"#e2e8f0",lineHeight:1.75,whiteSpace:"pre-wrap"}}>{sec.replace(/^## .+\n/,"").trim()}</p>
+        </div>
+      );
+      return <p key={i} style={{fontSize:13,color:"rgba(255,255,255,0.4)",whiteSpace:"pre-wrap",marginBottom:8}}>{sec}</p>;
+    });
+  }
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {phase==="loading"&&(
+        <div style={{...S.card,textAlign:"center",padding:"40px 24px"}}>
+          <div className="spinner"/>
+          <p style={{color:"white",fontWeight:600,fontSize:16,marginBottom:4}}>Analisando com IA…</p>
+          <p style={{color:"rgba(255,255,255,0.35)",fontSize:13,marginBottom:18}}>Protocolo de Manchester em execução</p>
+          <div style={{textAlign:"left",fontFamily:"monospace",fontSize:12,color:"#4ade80",lineHeight:2}}>
+            {logs.map((l,i)=><div key={i}>{l}</div>)}
+          </div>
+        </div>
+      )}
+      {(phase==="streaming"||phase==="done")&&(<>
+        <div style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+            <div>
+              <p style={{...S.label,marginBottom:4}}>Paciente</p>
+              <p style={{color:"white",fontWeight:700,fontSize:18}}>{data.nome}</p>
+              <p style={{color:"rgba(255,255,255,0.35)",fontSize:13}}>CPF: {data.cpf} · {data.wpp}</p>
+            </div>
+            {cat&&<Badge cat={`${cat} · ${wait}`}/>}
+          </div>
+        </div>
+        <div style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+            <p style={S.secHead}>Laudo Clínico — IA</p>
+            <span style={{fontSize:11,padding:"3px 10px",borderRadius:12,background:"rgba(59,130,246,0.1)",color:"#93c5fd",border:"1px solid rgba(59,130,246,0.2)"}}>
+              {phase==="streaming"?"⚡ Gerando...":"✓ Concluído"}
+            </span>
+          </div>
+          {phase==="streaming"
+            ?<p style={{fontSize:14,color:"#e2e8f0",lineHeight:1.75,whiteSpace:"pre-wrap"}}>{laudo.replace(/CLASSIFICAÇÃO:.*\n/,"").replace(/TEMPO DE ESPERA:.*\n/,"")}</p>
+            :<div>{renderLaudo(laudo)}</div>
+          }
+        </div>
+        {phase==="done"&&(
+          <div style={S.card}>
+            <button onClick={()=>onConcluir({id:genId(),nome:data.nome,cpf:data.cpf,wpp:data.wpp,comor:data.comor,alerg:data.alerg,meds:data.meds,sintomas:data.queixa,chips:data.chips,dor:data.dor,manchester:cat||"NÃO URGENTE",wait:wait||"120 min",laudo:ref.current,status:"Aguardando"})}
+              style={{...S.btnGreen,marginBottom:10}}>
+              ✅ Confirmar e Enviar ao Painel Médico
+            </button>
+            <button onClick={()=>{
+              const msg=encodeURIComponent(`🏥 *LAUDO — Beyth Rapha'*\n👤 *Paciente:* ${data.nome}\n📄 *CPF:* ${data.cpf}\n🔴 *Manchester:* ${cat} · ${wait}\n💬 *Queixa:* ${data.queixa}\n\n${ref.current.slice(0,600)}\n\n_Laudo por IA — validação médica obrigatória._`);
+              window.open(`https://wa.me/5511999999999?text=${msg}`,"_blank");
+            }} style={{...S.btnBlue}}>
+              📱 Enviar Laudo via WhatsApp
+            </button>
+          </div>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+function PortalPaciente({onCadastrado}) {
+  const [step,setStep]=useState(PATIENT_STEPS.CONSENT);
+  const [fd,setFd]=useState(null);
+
+  function concluir(p){
+    onCadastrado(p);
+    setStep(PATIENT_STEPS.CONSENT);
+    setFd(null);
+    alert(`✅ ${p.nome} adicionado à fila médica — Manchester: ${p.manchester}`);
+  }
+
+  const steps=[["1","Consentimento",PATIENT_STEPS.CONSENT],["2","Cadastro",PATIENT_STEPS.FORM],["3","Triagem IA",PATIENT_STEPS.TRIAGE]];
+
+  return(
+    <div style={{maxWidth:700,margin:"0 auto",padding:"28px 16px 60px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:24}}>
+        {steps.map(([n,label,s],i)=>(
+          <div key={s} style={{display:"flex",alignItems:"center",gap:8,flex:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:26,height:26,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:step===s?"#2563eb":"rgba(255,255,255,0.08)",color:step===s?"white":"rgba(255,255,255,0.4)",border:step===s?"none":"1px solid rgba(255,255,255,0.1)"}}>{n}</div>
+              <span style={{fontSize:12,color:step===s?"white":"rgba(255,255,255,0.3)",fontWeight:step===s?600:400}}>{label}</span>
+            </div>
+            {i<2&&<div style={{flex:1,height:1,background:"rgba(255,255,255,0.08)"}}/>}
+          </div>
+        ))}
+      </div>
+      {step===PATIENT_STEPS.CONSENT&&<ConsentStep onNext={()=>setStep(PATIENT_STEPS.FORM)}/>}
+      {step===PATIENT_STEPS.FORM&&<FormStep onSubmit={d=>{setFd(d);setStep(PATIENT_STEPS.TRIAGE);}}/>}
+      {step===PATIENT_STEPS.TRIAGE&&<TriageStep data={fd} onConcluir={concluir}/>}
+    </div>
+  );
+}
+
+// ── PAINEL MÉDICO ────────────────────────────────────────────
+function PainelMedico({fila,onFinalizar}) {
+  const [sel,setSel]=useState(null);
+  const [exame,setExame]=useState("nenhum");
+  const [presc,setPresc]=useState("");
+  const [proc,setProc]=useState(false);
+  const urgO={"IMEDIATO":0,"MUITO URGENTE":1,"URGENTE":2,"POUCO URGENTE":3,"NÃO URGENTE":4};
+  const filaO=[...fila].sort((a,b)=>(urgO[a.manchester]??5)-(urgO[b.manchester]??5));
+
+  function finalizar(){
+    if(!sel)return;
+    setProc(true);
+    setTimeout(()=>{
+      const ex=EXAMES.find(e=>e.id===exame);
+      onFinalizar({paciente:sel,exame:ex,prescricao:presc,totalConsulta:150,totalExame:ex.valor,splitMedico:90,splitLab:ex.split,retidoPlataforma:60+(ex.valor-ex.split),status:"LIQUIDADO"});
+      setSel(null);setExame("nenhum");setPresc("");setProc(false);
+      alert("✅ Consulta finalizada! Split financeiro processado.");
+    },1200);
+  }
+
+  return(
+    <div style={{maxWidth:900,margin:"0 auto",padding:"28px 16px 60px"}}>
+      <h2 style={{color:"white",fontWeight:700,fontSize:22,marginBottom:4}}>Painel do Plantonista</h2>
+      <p style={{color:"rgba(255,255,255,0.35)",fontSize:14,marginBottom:24}}>{fila.length} paciente{fila.length!==1?"s":""} aguardando · Ordenado por prioridade Manchester</p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1.5fr",gap:16,alignItems:"start"}}>
+        <div>
+          <p style={S.secHead}>Fila de Atendimento</p>
+          {filaO.length===0&&<div style={{...S.card,textAlign:"center",padding:32}}><p style={{fontSize:32,marginBottom:8}}>🎉</p><p style={{color:"rgba(255,255,255,0.4)",fontSize:14}}>Fila zerada!</p></div>}
+          {filaO.map(p=>{
+            const isS=sel?.id===p.id;
+            return(
+              <div key={p.id} onClick={()=>setSel(p)} style={{...S.card,cursor:"pointer",padding:"14px 18px",marginBottom:10,borderColor:isS?"#2563eb":"rgba(255,255,255,0.08)",background:isS?"rgba(37,99,235,0.08)":"rgba(255,255,255,0.03)",transition:"all 0.2s"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                  <div>
+                    <p style={{color:"white",fontWeight:600,fontSize:14,marginBottom:2}}>{p.nome}</p>
+                    <p style={{color:"rgba(255,255,255,0.35)",fontSize:11,marginBottom:6}}>{p.id} · Dor: {p.dor}/10</p>
+                    <p style={{color:"rgba(255,255,255,0.5)",fontSize:12,lineHeight:1.5}}>{p.sintomas?.slice(0,80)||p.chips?.join(", ")||"—"}...</p>
+                  </div>
+                  <Badge cat={p.manchester}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div>
+          {!sel?(
+            <div style={{...S.card,textAlign:"center",padding:"40px 24px"}}>
+              <p style={{fontSize:36,marginBottom:12}}>👨‍⚕️</p>
+              <p style={{color:"rgba(255,255,255,0.4)",fontSize:14}}>Selecione um paciente para atender.</p>
+            </div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <div style={S.card}>
+                <p style={S.secHead}>Prontuário</p>
+                <p style={{color:"white",fontWeight:700,fontSize:18,marginBottom:4}}>{sel.nome}</p>
+                <p style={{color:"rgba(255,255,255,0.35)",fontSize:13,marginBottom:14}}>{sel.id} · {sel.cpf} · {sel.wpp}</p>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,fontSize:13,marginBottom:14}}>
+                  {[["Comorbidades",sel.comor],["Alergias",sel.alerg],["Medicamentos",sel.meds],["Dor",sel.dor+"/10"]].map(([k,v])=>(
+                    <div key={k} style={{background:"rgba(0,0,0,0.2)",borderRadius:8,padding:"8px 12px"}}>
+                      <p style={{fontSize:10,color:"rgba(255,255,255,0.3)",textTransform:"uppercase",marginBottom:2}}>{k}</p>
+                      <p style={{color:"rgba(255,255,255,0.75)",fontSize:12}}>{v||"Não informado"}</p>
+                    </div>
+                  ))}
+                </div>
+                <div style={{background:"rgba(0,0,0,0.2)",borderRadius:8,padding:"10px 14px",marginBottom:14}}>
+                  <p style={{fontSize:10,color:"rgba(255,255,255,0.3)",textTransform:"uppercase",marginBottom:4}}>Laudo IA</p>
+                  <p style={{fontSize:13,color:"rgba(255,255,255,0.65)",lineHeight:1.65,whiteSpace:"pre-wrap"}}>{sel.laudo?.slice(0,400)||"—"}…</p>
+                </div>
+                <Badge cat={sel.manchester}/>
+              </div>
+              <div style={S.card}>
+                <p style={S.secHead}>Conduta Médica</p>
+                <div style={{marginBottom:14}}>
+                  <p style={{...S.label,marginBottom:8}}>Exame Complementar</p>
+                  {EXAMES.map(e=>(
+                    <label key={e.id} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"10px 14px",borderRadius:8,marginBottom:6,background:exame===e.id?"rgba(37,99,235,0.1)":"rgba(255,255,255,0.02)",border:`1px solid ${exame===e.id?"rgba(37,99,235,0.4)":"rgba(255,255,255,0.07)"}`,transition:"all 0.15s"}}>
+                      <input type="radio" name="exame" value={e.id} checked={exame===e.id} onChange={()=>setExame(e.id)} style={{accentColor:"#2563eb"}}/>
+                      <div style={{flex:1}}>
+                        <p style={{color:"white",fontSize:13,fontWeight:500}}>{e.label}</p>
+                        {e.valor>0&&<p style={{color:"rgba(255,255,255,0.3)",fontSize:11}}>{fmt(e.valor)} · Lab: {e.lab}</p>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <Field label="Prescrição / Orientações">
+                  <FTextarea value={presc} onChange={e=>setPresc(e.target.value)} placeholder="Dipirona 500mg se dor... Retornar em 7 dias..."/>
+                </Field>
+              </div>
+              <button onClick={finalizar} disabled={proc} style={{...S.btnBlue,opacity:proc?0.6:1}}>
+                {proc?"⏳ Processando...":"⚕️ Finalizar Consulta e Processar Pagamento"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MÓDULO FINTECH ───────────────────────────────────────────
+function ModuloFintech({transacoes,lucro}) {
+  const tC=transacoes.reduce((a,t)=>a+(t.totalConsulta||150),0);
+  const tE=transacoes.reduce((a,t)=>a+(t.totalExame||0),0);
+  const tM=transacoes.reduce((a,t)=>a+(t.splitMedico||90),0);
+  const tL=transacoes.reduce((a,t)=>a+(t.splitLab||0),0);
+
+  const kpis=[
+    {label:"Receita Bruta Total",value:fmt(tC+tE),color:"#3b82f6"},
+    {label:"Lucro Líquido Retido",value:fmt(lucro),color:"#10b981"},
+    {label:"Repasse Médicos",value:fmt(tM),color:"#a78bfa"},
+    {label:"Repasse Laboratórios",value:fmt(tL),color:"#f97316"},
+  ];
+
+  return(
+    <div style={{maxWidth:900,margin:"0 auto",padding:"28px 16px 60px"}}>
+      <h2 style={{color:"white",fontWeight:700,fontSize:22,marginBottom:4}}>Módulo Fintech — Split de Receitas</h2>
+      <p style={{color:"rgba(255,255,255,0.35)",fontSize:14,marginBottom:24}}>Divisão automática entre plataforma, médicos e laboratórios.</p>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:24}}>
+        {kpis.map(k=>(
+          <div key={k.label} style={{...S.card,padding:"16px 18px"}}>
+            <p style={{fontSize:11,color:"rgba(255,255,255,0.35)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{k.label}</p>
+            <p style={{fontSize:20,fontWeight:800,color:k.color}}>{k.value}</p>
+          </div>
+        ))}
+      </div>
+      <div style={{...S.card,marginBottom:20}}>
+        <p style={S.secHead}>Modelo de Split — Regras</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          {[
+            {label:"Consulta (R$ 150)",splits:[["Médico Plantonista","R$ 90","60%","#a78bfa"],["Plataforma","R$ 60","40%","#10b981"]]},
+            {label:"Exames Lab (R$ 120)",splits:[["Sabin (parceiro)","R$ 96","80%","#f97316"],["Plataforma","R$ 24","20%","#10b981"]]},
+            {label:"Imagem TC/RX (R$ 800)",splits:[["Fleury (parceiro)","R$ 640","80%","#f97316"],["Plataforma","R$ 160","20%","#10b981"]]},
+            {label:"ECG Interno (R$ 90)",splits:[["Operação","R$ 0","—","#64748b"],["Plataforma 100%","R$ 90","100%","#10b981"]]},
+          ].map(g=>(
+            <div key={g.label} style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:"14px 16px"}}>
+              <p style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.6)",marginBottom:10}}>{g.label}</p>
+              {g.splits.map(([name,val,pct,color])=>(
+                <div key={name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,paddingBottom:6,borderBottom:"1px solid rgba(255,255,255,0.05)"}}>
+                  <div><p style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>{name}</p><p style={{fontSize:10,color:"rgba(255,255,255,0.3)"}}>{pct}</p></div>
+                  <span style={{fontSize:13,fontWeight:700,color}}>{val}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={S.card}>
+        <p style={S.secHead}>Histórico de Transações</p>
+        {transacoes.length===0
+          ?<p style={{color:"rgba(255,255,255,0.3)",fontSize:14,textAlign:"center",padding:"20px 0"}}>Nenhuma transação ainda.</p>
+          :<div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead><tr>
+                {["Paciente","Consulta","Exame","Médico","Lab","Plataforma","Status"].map(h=>(
+                  <th key={h} style={{textAlign:"left",padding:"8px 12px",fontSize:10,color:"rgba(255,255,255,0.3)",textTransform:"uppercase",letterSpacing:"0.07em",borderBottom:"1px solid rgba(255,255,255,0.06)"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {transacoes.map((t,i)=>(
+                  <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                    <td style={{padding:"10px 12px",color:"white",fontWeight:500}}>{t.paciente?.nome||t.paciente}</td>
+                    <td style={{padding:"10px 12px",color:"#93c5fd"}}>{fmt(t.totalConsulta||150)}</td>
+                    <td style={{padding:"10px 12px",color:"#f97316"}}>{fmt(t.totalExame||0)}</td>
+                    <td style={{padding:"10px 12px",color:"#a78bfa"}}>{fmt(t.splitMedico||90)}</td>
+                    <td style={{padding:"10px 12px",color:"#fb923c"}}>{fmt(t.splitLab||0)}</td>
+                    <td style={{padding:"10px 12px",color:"#10b981",fontWeight:700}}>{fmt(t.retidoPlataforma||60)}</td>
+                    <td style={{padding:"10px 12px"}}><span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:8,background:"rgba(16,185,129,0.12)",color:"#10b981",border:"1px solid rgba(16,185,129,0.25)"}}>{t.status}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+      </div>
+    </div>
+  );
+}
+
+// ── APP ROOT ─────────────────────────────────────────────────
+function App() {
+  const [tab,setTab]=useState(TABS.PACIENTE);
+  const [fila,setFila]=useState(FILA_INICIAL);
+  const [transacoes,setTransacoes]=useState(TRANSACOES_INICIAIS);
+  const [lucro,setLucro]=useState(34720.00);
+
+  function handleCadastrado(p){setFila(prev=>[p,...prev]);setTab(TABS.MEDICO);}
+  function handleFinalizar({paciente,exame,...fin}){
+    setFila(prev=>prev.filter(p=>p.id!==paciente.id));
+    setTransacoes(prev=>[{paciente,...fin,status:"LIQUIDADO"},...prev]);
+    setLucro(prev=>prev+fin.retidoPlataforma);
+  }
+
+  const navTabs=[
+    {id:TABS.PACIENTE,label:"Portal Paciente",icon:"👤"},
+    {id:TABS.MEDICO,label:"Painel Médico",icon:"⚕️",badge:fila.length},
+    {id:TABS.FINTECH,label:"Módulo Fintech",icon:"💰"},
+  ];
+
+  return(
+    <div style={{background:"#0b1120",minHeight:"100vh"}}>
+      <nav style={{background:"rgba(0,0,0,0.55)",borderBottom:"1px solid rgba(255,255,255,0.07)",backdropFilter:"blur(14px)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{maxWidth:960,margin:"0 auto",padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:38,height:38,borderRadius:11,background:"rgba(37,99,235,0.15)",border:"1px solid rgba(37,99,235,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>⚕️</div>
+            <div>
+              <div style={{color:"white",fontWeight:900,fontSize:15,letterSpacing:2}}>BEYTH RAPHA'</div>
+              <div style={{color:"rgba(255,255,255,0.28)",fontSize:9,letterSpacing:"0.14em",textTransform:"uppercase"}}>Hospital IA · Fintech</div>
+            </div>
+          </div>
+          <div style={{display:"flex",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:4,gap:2}}>
+            {navTabs.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 14px",borderRadius:9,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.2s",position:"relative",background:tab===t.id?"#2563eb":"transparent",color:tab===t.id?"white":"rgba(255,255,255,0.4)"}}>
+                <span style={{marginRight:5}}>{t.icon}</span>{t.label}
+                {t.badge>0&&<span style={{position:"absolute",top:-4,right:-4,width:18,height:18,borderRadius:"50%",background:"#ef4444",color:"white",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #0b1120"}}>{t.badge}</span>}
+              </button>
+            ))}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",background:"rgba(16,185,129,0.08)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:8}}>
+            <span className="pulse-dot"/>
+            <span style={{fontSize:11,fontWeight:700,color:"#34d399"}}>IA Online</span>
+          </div>
+        </div>
+      </nav>
+      {tab===TABS.PACIENTE&&<PortalPaciente onCadastrado={handleCadastrado}/>}
+      {tab===TABS.MEDICO&&<PainelMedico fila={fila} onFinalizar={handleFinalizar}/>}
+      {tab===TABS.FINTECH&&<ModuloFintech transacoes={transacoes} lucro={lucro}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
